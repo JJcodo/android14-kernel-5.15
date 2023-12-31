@@ -616,11 +616,14 @@ static int read_from_bdev_async(struct zram *zram, struct bio_vec *bvec,
 #define HUGE_WRITEBACK 1
 #define IDLE_WRITEBACK 2
 
-
+/*
+* Write compressed pages back to disk
+*/
 static ssize_t writeback_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t len)
 {
 	struct zram *zram = dev_to_zram(dev);
+	/* The number of pages that need to be written back */
 	unsigned long nr_pages = zram->disksize >> PAGE_SHIFT;
 	unsigned long index = 0;
 	struct bio bio;
@@ -648,11 +651,13 @@ static ssize_t writeback_store(struct device *dev,
 
 	down_read(&zram->init_lock);
 	if (!init_done(zram)) {
+		/* zram is not initialized */
 		ret = -EINVAL;
 		goto release_init_lock;
 	}
 
 	if (!zram->backing_dev) {
+		/* There is no write-back device for Zram. */
 		ret = -ENODEV;
 		goto release_init_lock;
 	}
@@ -665,7 +670,7 @@ static ssize_t writeback_store(struct device *dev,
 
 	for (; nr_pages != 0; index++, nr_pages--) {
 		struct bio_vec bvec;
-
+		/* constructing a bio */
 		bvec.bv_page = page;
 		bvec.bv_len = PAGE_SIZE;
 		bvec.bv_offset = 0;
@@ -685,7 +690,7 @@ static ssize_t writeback_store(struct device *dev,
 				break;
 			}
 		}
-
+		/* */
 		zram_slot_lock(zram, index);
 		if (!zram_allocated(zram, index))
 			goto next;
@@ -1234,6 +1239,7 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 	int ret;
 
 	zram_slot_lock(zram, index);
+	// For pages that are written back to disk, the WB flag will be set.
 	if (zram_test_flag(zram, index, ZRAM_WB)) {
 		struct bio_vec bvec;
 
@@ -1246,7 +1252,7 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 				zram_get_element(zram, index),
 				bio, partial_io);
 	}
-
+	// could not find the hanle, what is the wrong with it?
 	handle = zram_get_handle(zram, index);
 	if (!handle || zram_test_flag(zram, index, ZRAM_SAME)) {
 		unsigned long value;
@@ -1259,13 +1265,20 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 		zram_slot_unlock(zram, index);
 		return 0;
 	}
-
+	/*
+	* The returned value is zram->table[index].flags & (BIT(ZRAM_FLAG_SHIFT) - 1)
+	* So this means that the low ZRAM_FLAG_SHIFT bit is used to store the object size
+	*/
 	size = zram_get_obj_size(zram, index);
 
+	/*
+	* If the object size is not page_size, it means that the page is compressed
+	*/
 	if (size != PAGE_SIZE)
 		zstrm = zcomp_stream_get(zram->comp);
 
 	src = zs_map_object(zram->mem_pool, handle, ZS_MM_RO);
+	// 
 	if (size == PAGE_SIZE) {
 		dst = kmap_atomic(page);
 		memcpy(dst, src, PAGE_SIZE);
