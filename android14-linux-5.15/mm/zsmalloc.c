@@ -1260,22 +1260,53 @@ void *zs_map_object(struct zs_pool *pool, unsigned long handle,
 	 */
 	BUG_ON(in_interrupt());
 
-	/* From now on, migration cannot move the object */
+	/* 
+	* From now on, migration cannot move the object
+	* handle is a slab object, how does it prevent a slab object migration?
+	* as we all know, the object of slab can not be migrated.
+	* bit_spin_lock(HANDLE_PIN_BIT, (unsigned long *)handle);
+	*/
 	pin_tag(handle);
 
+	/*
+	* return *(unsigned long *)handle
+	* Convert the handle into an address, and obtain the obejct 
+	* based on this address. This object is an unsigned long type number.
+	*/
 	obj = handle_to_obj(handle);
+
+	/*
+	* The lowest part of the object is OBJ_TAG_BITS
+	* the middle part of the object is OBJ_INDEX_BITS
+	* The highest part of object is _PFN_BITS
+	* The page and object index can be obtained by executing obj_to_location
+	*/
 	obj_to_location(obj, &page, &obj_idx);
+
+	/* get zspage by page->private */
 	zspage = get_zspage(page);
 
-	/* migration cannot move any subpage in this zspage */
+	/*
+	* migration cannot move any subpage in this zspage
+	* How does it prevent a zspage migration?
+	* it get the read lock of zspage->lock
+	* The migration mechanism of zspage is implemented by zram
+	* Learn how to implement a driver page migration by studying zram page migration.
+	*/
 	migrate_read_lock(zspage);
-
+	/* get the class index and the fullness type according to zspage */
 	get_zspage_mapping(zspage, &class_idx, &fg);
+	/* get the class according to class inde */
 	class = pool->size_class[class_idx];
+	/* get the offset of the object within the page */
 	off = (class->size * obj_idx) & ~PAGE_MASK;
 
 	area = &get_cpu_var(zs_map_area);
 	area->vm_mm = mm;
+	/* 
+	* There are two situations, one is that the object is in one page, 
+	* and the other is that the obejct is in two adjacent pages in zspage.
+	*/
 	if (off + class->size <= PAGE_SIZE) {
 		/* this object is contained entirely within a page */
 		area->vm_addr = kmap_atomic(page);
@@ -1288,6 +1319,11 @@ void *zs_map_object(struct zs_pool *pool, unsigned long handle,
 	pages[1] = get_next_page(page);
 	BUG_ON(!pages[1]);
 
+	/*
+	* size in first page : size[0] = page - off
+	* size in second page : size[1] = class->size - size[0]
+	* Copy them to area->vm_buf and return
+	*/
 	ret = __zs_map_object(area, pages, off, class->size);
 out:
 	if (likely(!PageHugeObject(page)))
